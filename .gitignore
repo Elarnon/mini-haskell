@@ -7,3 +7,8 @@
 *.cmx
 *.cmxs
 *.cmxa
+.depend
+joujou
+lexer.ml
+parser.ml
+_build

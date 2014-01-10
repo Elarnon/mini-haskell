@@ -31,7 +31,6 @@ and block env = function
     (** Instance definitions are ignored. Student! This is your job! *)
     ([], env)
 
-
 and type_definitions env (TypeDefs (_, tdefs)) =
   let env = List.fold_left env_of_type_definition env tdefs in
   List.fold_left type_definition env tdefs
@@ -51,11 +50,11 @@ and datatype_definition t env = function
   | DAlgebraic ds ->
     List.fold_left algebraic_dataconstructor env ds
   | DRecordType (ts, ltys) ->
-    let env = List.fold_left (fun env x -> bind_type_variable x env) env ts in
     List.fold_left (label_type ts t) env ltys
 
 and label_type ts rtcon env (pos, l, ty) =
-  check_wf_type env KStar ty;
+  let env' = List.fold_left (fun env x -> bind_type_variable x env) env ts in
+  check_wf_type env' KStar ty;
   bind_label pos l ts ty rtcon env
 
 and algebraic_dataconstructor env (_, DName k, ts, kty) =
@@ -112,6 +111,7 @@ and check_equal_types pos ty1 ty2 =
     raise (IncompatibleTypes (pos, ty1, ty2))
 
 and type_application pos env x tys =
+  List.iter (check_wf_type env KStar) tys;
   let (ts, (_, ty)) = lookup pos x env in
   try
     substitute (List.combine ts tys) ty

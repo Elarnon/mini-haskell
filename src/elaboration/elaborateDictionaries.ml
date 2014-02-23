@@ -112,7 +112,7 @@ and label_type ts rtcon env (pos, l, ty) =
 
 and algebraic_dataconstructor env (_, DName k, ts, kty) =
   check_wf_scheme env ts kty;
-  bind_scheme (Name k) ts kty env
+  bind_scheme (Name k) ts [] kty env
 
 and introduce_type_parameters env ts =
   List.fold_left (fun env t -> bind_type_variable t env) env ts
@@ -151,11 +151,11 @@ and env_of_bindings env cdefs = List.(
   (function
     | BindValue (_, vs)
     | BindRecValue (_, vs) ->
-      fold_left (fun env (ValueDef (_, ts, _, (x, ty), _)) ->
-        bind_scheme x ts ty env
+      fold_left (fun env (ValueDef (_, ts, ps, (x, ty), _)) ->
+        bind_scheme x ts ps ty env
       ) env vs
     | ExternalValue (_, ts, (x, ty), _) ->
-      bind_scheme x ts ty env
+      bind_scheme x ts [] ty env
   ) cdefs
 )
 
@@ -165,15 +165,20 @@ and check_equal_types pos ty1 ty2 =
 
 and type_application pos env x tys =
   List.iter (check_wf_type env KStar) tys;
-  let (ts, (_, ty)) = lookup pos x env in
+  let (ts, ps, (_, ty)) = lookup pos x env in
   try
-    substitute (List.combine ts tys) ty
+    let slist = List.combine ts tys in
+    (List.map (fun (ClassPredicate (c, p)) -> (c, List.assoc p slist)) ps,
+     substitute slist ty)
   with _ ->
     raise (InvalidTypeApplication pos)
 
 and expression env = function
   | EVar (pos, ((Name s) as x), tys) ->
-    (EVar (pos, x, tys), type_application pos env x tys)
+    let (ps, ts) = type_application pos env x tys in
+    (* TODO: Apply instance parameters *)
+    let e = EVar (pos, x, tys) in
+    (e, ts)
 
   | ELambda (pos, ((x, aty) as b), e') ->
     check_wf_type env KStar aty;
@@ -212,7 +217,7 @@ and expression env = function
     expression env e
 
   | EDCon (pos, DName x, tys, es) ->
-    let ty = type_application pos env (Name x) tys in
+    let _, ty = type_application pos env (Name x) tys in
     let (itys, oty) = destruct_ntyarrow ty in
     if List.(length itys <> length es) then
       raise (InvalidDataConstructorApplication pos)
@@ -315,11 +320,11 @@ and branch env sty (Branch (pos, p, e)) =
 
 and concat pos env1 env2 =
   List.fold_left
-    (fun env (_, (x, ty)) -> bind_simple x ty env)
+    (fun env (_, _, (x, ty)) -> bind_simple x ty env)
     env1 (values env2)
 
-and linear_bind pos env (ts, (x, ty)) =
-  assert (ts = []); (** Because patterns only bind monomorphic values. *)
+and linear_bind pos env (ts, ps, (x, ty)) =
+  assert (ts = [] && ps = []); (** Because patterns only bind monomorphic values. *)
   try
     ignore (lookup pos x env);
     raise (NonLinearPattern pos)
@@ -330,10 +335,10 @@ and join pos denv1 denv2 =
   List.fold_left (linear_bind pos) denv2 (values denv1)
 
 and check_same_denv pos denv1 denv2 =
-  List.iter (fun (ts, (x, ty)) ->
-    assert (ts = []); (** Because patterns only bind monomorphic values. *)
+  List.iter (fun (ts, ps, (x, ty)) ->
+    assert (ts = [] && ps = []); (** Because patterns only bind monomorphic values. *)
     try
-      let (_, (_, ty')) = lookup pos x denv2 in
+      let (_, _, (_, ty')) = lookup pos x denv2 in
       check_equal_types pos ty ty'
     with _ ->
       raise (PatternsMustBindSameVariables pos)
@@ -347,7 +352,7 @@ and pattern env xty = function
     ElaborationEnvironment.empty
 
   | PAlias (pos, name, p) ->
-    linear_bind pos (pattern env xty p) ([], (name, xty))
+    linear_bind pos (pattern env xty p) ([], [], (name, xty))
 
   | PTypeConstraint (pos, p, pty) ->
     check_equal_types pos pty xty;
@@ -358,7 +363,7 @@ and pattern env xty = function
     ElaborationEnvironment.empty
 
   | PData (pos, (DName x), tys, ps) ->
-    let kty = type_application pos env (Name x) tys in
+    let _, kty = type_application pos env (Name x) tys in
     let itys, oty = destruct_ntyarrow kty in
     if List.(length itys <> length ps) then
       raise (InvalidDataConstructorApplication pos)
@@ -395,7 +400,7 @@ and value_binding env = function
     (BindRecValue (pos, vs), env)
 
   | ExternalValue (pos, ts, ((x, ty) as b), os) ->
-    let env = bind_scheme x ts ty env in
+    let env = bind_scheme x ts [] ty env in
     (ExternalValue (pos, ts, b, os), env)
 
 and eforall pos ts e =
@@ -425,8 +430,9 @@ and value_definition env (ValueDef (pos, ts, ps, (x, xty), e)) =
     let e, ty = expression env' e in
     let b = (x, ty) in
     check_equal_types pos xty ty;
+    (* TODO: Add arguments for type instances! *)
     (ValueDef (pos, ts, [], b, EForall (pos, ts, e)),
-     bind_scheme x ts ty env)
+     bind_scheme x ts ps ty env)
   end else begin
     if ts <> [] then
       raise (ValueRestriction pos)
@@ -439,7 +445,7 @@ and value_definition env (ValueDef (pos, ts, ps, (x, xty), e)) =
   end
 
 and value_declaration env (ValueDef (pos, ts, ps, (x, ty), e)) =
-  bind_scheme x ts ty env
+  bind_scheme x ts ps ty env
 
 
 and is_value_form = function

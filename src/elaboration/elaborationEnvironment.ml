@@ -5,7 +5,7 @@ open Types
 open ElaborationExceptions
 
 type t = {
-  values       : (tnames * binding) list;
+  values       : (tnames * class_predicates * binding) list;
   types        : (tname * (Types.kind * type_definition)) list;
   classes      : (tname * class_definition) list;
   labels       : (lname * (tnames * Types.t * tname)) list;
@@ -17,14 +17,15 @@ let values env = env.values
 
 let lookup pos x env =
   try
-    List.find (fun (_, (x', _)) -> x = x') env.values
+    List.find (fun (_, _, (x', _)) -> x = x') env.values
   with Not_found -> raise (UnboundIdentifier (pos, x))
 
-let bind_scheme x ts ty env =
-  { env with values = (ts, (x, ty)) :: env.values }
+let bind_scheme x ts ps ty env =
+  (* TODO: Check that ps is canonical *)
+  { env with values = (ts, ps, (x, ty)) :: env.values }
 
 let bind_simple x ty env =
-  bind_scheme x [] ty env
+  bind_scheme x [] [] ty env
 
 let bind_type t kind tdef env =
   { env with types = (t, (kind, tdef)) :: env.types }

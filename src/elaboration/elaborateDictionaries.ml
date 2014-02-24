@@ -28,61 +28,17 @@ and block env = function
 
   | BDefinition d ->
     let d, env = value_binding env d in
+    (* TODO: enforce closed types *)
     ([BDefinition d], env)
 
   | BClassDefinition c ->
-     let pos = c.class_position in
-     let rtcon = c.class_name in
-     (* Uniquify superclasses' names, i.e. reduces [A 'a, A 'a => B 'a] to [A 'a => B 'a] *)
-     (* TODO: Emit a warning ? *)
-     let super_names =
-       Misc.(StringSet.elements
-               (set_of_list (List.map (fun (TName x) -> x) c.superclasses))
-            ) in
-     (* Collect the superclasses.
-        [is_superclass] raises an exception if the superclass is not defined. *)
-     let superclasses =
-       List.fold_left
-         (fun sclasses sn ->
-            (* We normalize superclasses - if [A 'a => B 'a] and [A 'a, B 'a => C 'a] we
-               simplify the constraint for [C] to [B 'a => C 'a] *)
-            if List.exists (fun super' -> is_superclass pos super' (TName sn) env) c.superclasses
-            then sclasses else TName sn :: sclasses)
-         [] super_names in
-     (* Normalize the class definition *)
-     let c = { c with superclasses = superclasses } in
-     (* Locally bind the class parameter *)
-     let env' = bind_type_variable c.class_parameter env in
-     (* Elaborate the superclass dictionary fields *)
-     let labels, env' =
-       Misc.list_foldmap
-         (superclass c pos)
-         env' superclasses in
-     (* Elaborate the class dictionary methods *)
-     let labels =
-       List.fold_left
-         (class_member env')
-         labels c.class_members in
-     let datatype_def = DRecordType ( [c.class_parameter], List.rev labels ) in
-     let type_def = TypeDef ( pos, KArrow (KStar, KStar), rtcon, datatype_def ) in
-     let type_mutual_defs = TypeDefs ( pos, [ type_def ] ) in
-     (* Bind the class in the environment.
-        [bind_class] raises an exception if the class is already defined. *)
-     let env = bind_class c.class_name c env in
-     ([BTypeDefinitions type_mutual_defs], env)
+    let ty, v, env = class_definition env c in
+    ([BTypeDefinitions ty; BDefinition v], env)
 
   | BInstanceDefinitions is ->
     (** Instance definitions are ignored. Student! This is your job! *)
     ([], env)
 
-and superclass c pos env super =
-  let l = mangle_super c.class_name super in
-  let ty = TyApp (pos, mangle_class super, [TyVar (pos, c.class_parameter)]) in
-  ((pos, l, ty), env)
-
-and class_member env labels (pos, l, ty) =
-  check_wf_type env KStar ty;
-  (pos, l, ty) :: labels (* TODO: Mangle l *)
 
 and type_definitions env (TypeDefs (_, tdefs)) =
   let env = List.fold_left env_of_type_definition env tdefs in
@@ -113,9 +69,6 @@ and label_type ts rtcon env (pos, l, ty) =
 and algebraic_dataconstructor env (_, DName k, ts, kty) =
   check_wf_scheme env ts kty;
   bind_scheme (Name k) ts [] kty env
-
-and introduce_type_parameters env ts =
-  List.fold_left (fun env t -> bind_type_variable t env) env ts
 
 and check_wf_scheme env ts ty =
   check_wf_type (introduce_type_parameters env ts) KStar ty
@@ -464,3 +417,96 @@ and is_value_form = function
   | _ ->
     false
 
+and class_definition env c =
+    (* TODO: Implement the restriction stuff w.r.t. local lets *)
+    let pos = c.class_position in
+    let c = normalize_class env c in
+
+    (* Typechecking *)
+
+    (* Construct the superclass labels for the elaborated record
+       type. [label_of_superclass] also checks that the superclasses
+       already exist at that point. *)
+    let labels =
+      List.map (label_of_superclass env c pos) c.superclasses in
+    (* Locally bind the class parameter for checking the methods'
+       types *)
+    let env' = bind_type_variable c.class_parameter env in
+    (* Collect the methods' labels while checking that their type is
+       well-formed.  [label_of_class_member] also performs
+       collision-checking and raises an error when a method is
+       defined twice in the same class. *)
+    let labels =
+      List.fold_left (label_of_class_member c.class_name env')
+        labels c.class_members in
+
+    (* Elaboration *)
+
+    (* Elaborate the record type *)
+    let rtcon = mangle_class c.class_name in
+    let param = c.class_parameter in
+    let datatype_def = DRecordType ( [ c.class_parameter ], labels ) in
+    let type_def = TypeDef ( pos, KArrow ( KStar, KStar ), rtcon, datatype_def ) in
+    let type_mutual_defs = TypeDefs ( pos, [ type_def ] ) in
+    (* For each method [meth : T] in the class [K], elaborate an
+       accessor function [let ['a] meth : 'a K -> T = ...] *)
+    let value_definitions =
+      List.map (fun (_, (LName m), ty) ->
+          ValueDef ( pos, [ param ], [],
+                     ( Name m, ntyarrow pos [ apply_class pos c ] ty ),
+                     EForall (pos, [ param ],
+                              ELambda (pos, (Name "x", apply_class pos c),
+                                       ERecordAccess (pos, EVar (pos, Name "x", []),
+                                                      LName m)))))
+        c.class_members in
+    let value_binding = BindValue (pos, value_definitions) in
+
+    (* Finally, bind the class in the (initial) environment *)
+    let env = bind_class c.class_name c env in
+    (* And for each method, bind the corresponding value for further
+       typechecking: if [K] defines a method [meth : T], then it
+       defines a function [let ['a] [K 'a] (meth : T) = ...]  *)
+    let env =
+      List.fold_left (fun env (_, (LName m), ty) ->
+          bind_scheme (Name m) [c.class_parameter]
+            [ClassPredicate (c.class_name, c.class_parameter)] ty env)
+        env c.class_members in
+
+    (type_mutual_defs, value_binding, env)
+
+and apply_class pos c =
+  TyApp ( pos, mangle_class c.class_name, [ TyVar ( pos, c.class_parameter ) ] )
+
+and normalize_class env c =
+  (* Uniquify superclasses' names, i.e. reduces [A 'a, A 'a => B 'a] to [A 'a => B 'a] *)
+  let pos = c.class_position in
+  (* TODO: Emit a warning ? *)
+  let super_names =
+    Misc.(StringSet.elements
+            (set_of_list (List.map (fun (TName x) -> x) c.superclasses))
+         ) in
+  (* Collect the superclasses.
+     [is_superclass] raises an exception if the superclass is not defined. *)
+  let superclasses =
+    List.fold_left
+      (fun sclasses sn ->
+         (* We normalize superclasses - if [A 'a => B 'a] and [A 'a, B 'a => C 'a] we
+            simplify the constraint for [C] to [B 'a => C 'a] *)
+         if List.exists (fun super' -> is_superclass pos super' (TName sn) env) c.superclasses
+         then sclasses else TName sn :: sclasses)
+      [] super_names in
+  (* Normalize the class definition *)
+  { c with superclasses = superclasses }
+
+and label_of_superclass env c pos super =
+  lookup_class pos super env |> ignore;
+  let l = mangle_super c.class_name super in
+  let ty = TyApp (pos, mangle_class super, [TyVar (pos, c.class_parameter)]) in
+  (pos, l, ty)
+
+and label_of_class_member c env labels (pos, l, ty) =
+  check_wf_type env KStar ty;
+  try
+    List.find (fun (_, l', _) -> l' = l) labels |> ignore;
+    raise (MultipleMethods (pos, c, l))
+  with Not_found -> (pos, l, ty) :: labels (* TODO: Mangle l *)

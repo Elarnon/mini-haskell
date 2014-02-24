@@ -20,7 +20,7 @@ val values : t -> (tnames * Types.class_predicates * binding) list
 (** [lookup pos x env] returns the binding of [x]. *)
 val lookup : position -> name -> t -> (tnames * Types.class_predicates * binding)
 
-(** [bind_scheme n ts ty e] associates the scheme [ts. ty] to
+(** [bind_scheme n ts ps ty e] associates the scheme [ts. ps => ty] to
     the identifier [n] in [e]. *)
 val bind_scheme : name -> tnames -> Types.class_predicates -> Types.t -> t -> t
 
@@ -41,6 +41,8 @@ val bind_type : tname -> Types.kind -> type_definition -> t -> t
 
 (** [bind_type_variable x e] introduces the type variable [x] in [e]. *)
 val bind_type_variable : tname -> t -> t
+
+val introduce_type_parameters : t -> tnames -> t
 
 (** [lookup_class pos c e] returns the class_definition of [c] in [e]. *)
 val lookup_class : position -> tname -> t -> class_definition

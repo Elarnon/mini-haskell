@@ -21,7 +21,6 @@ let lookup pos x env =
   with Not_found -> raise (UnboundIdentifier (pos, x))
 
 let bind_scheme x ts ps ty env =
-  (* TODO: Check that ps is canonical *)
   { env with values = (ts, ps, (x, ty)) :: env.values }
 
 let bind_simple x ty env =
@@ -29,6 +28,12 @@ let bind_simple x ty env =
 
 let bind_type t kind tdef env =
   { env with types = (t, (kind, tdef)) :: env.types }
+
+let bind_type_variable t env =
+  bind_type t KStar (TypeDef (undefined_position, KStar, t, DAlgebraic [])) env
+
+let introduce_type_parameters env ts =
+  List.fold_left (fun env t -> bind_type_variable t env) env ts
 
 let lookup_type pos t env =
   try
@@ -62,8 +67,12 @@ let rec is_superclass pos k1 k2 env =
   let sc1 = lookup_superclasses pos k1 env in
   List.mem k2 sc1 || List.exists (fun k' -> is_superclass pos k' k2 env) sc1
 
-let bind_type_variable t env =
-  bind_type t KStar (TypeDef (undefined_position, KStar, t, DAlgebraic [])) env
+let lookup_subclasses pos k env =
+  List.fold_left (fun acc (cname, c) ->
+      if List.mem k c.superclasses
+      then cname::acc else acc)
+    [] env.classes
+
 
 let lookup_label pos l env =
   try

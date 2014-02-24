@@ -1,0 +1,2 @@
+class A 'a { x : 'a ; y : 'a }
+instance A int { x = 2 }

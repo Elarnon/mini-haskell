@@ -117,6 +117,9 @@ let handle_error f =
     | MultipleLabels (pos, LName l) ->
       fatal' pos (Printf.sprintf "  Multiple definitions of label `%s'." l)
 
+    | MultipleMethods (pos, TName c, LName l) -> 
+      fatal' pos (Printf.sprintf "  Multiple definitions of method `%s' in class `%s'." l c)
+
     | OverloadedSymbolCannotBeBound (pos, Name x) ->
       fatal' pos (Printf.sprintf
                    "  Identifier `%s' cannot be both overloaded and let-bound."

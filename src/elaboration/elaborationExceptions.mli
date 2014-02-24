@@ -18,6 +18,8 @@ exception UnboundLabel of position * lname
     times in a record. *)
 exception MultipleLabels of position * lname
 
+exception MultipleMethods of position * tname * lname
+
 (** [AlreadyDefinedClass] is raised if a class is defined twice. *)
 exception AlreadyDefinedClass of position * tname
 

@@ -6,6 +6,7 @@ exception UnboundTypeVariable of position * tname
 exception UnboundClass of position * tname
 exception UnboundLabel of position * lname
 exception MultipleLabels of position * lname
+exception MultipleMethods of position * tname * lname
 exception AlreadyDefinedClass of position * tname
 exception InvalidTypeApplication of position
 exception InvalidDataConstructorApplication of position
